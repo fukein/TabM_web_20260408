@@ -7,3 +7,4 @@ scikit-learn==1.6.1
 xgboost==3.0.2
 shap==0.44.1
 tabm== 0.0.3
+openpyxl==3.1.5
