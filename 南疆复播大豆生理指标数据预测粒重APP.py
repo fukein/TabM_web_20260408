@@ -10,14 +10,14 @@ import warnings
 warnings.filterwarnings('ignore')  # 屏蔽无关警告，确保运行稳定性
 
 # ===================== 全局样式配置 =====================
-# 定义专业配色方案（农业领域适配：绿色系为主，搭配深蓝/灰色提升专业感）
+# 定义专业配色方案
 COLORS = {
-    "primary": "#2E8B57",       # 主色：海绿色（农业相关，体现作物特性）
-    "secondary": "#2F4F4F",     # 辅助色：深灰色（文本/边框，提升可读性）
-    "accent": "#4682B4",         # 强调色：钢蓝色（按钮/重点标识）
-    "background": "#F8F9FA",    # 背景色：浅灰色（页面背景，降低视觉疲劳）
-    "card": "#FFFFFF",           # 卡片色：白色（内容容器，突出内容）
-    "text_light": "#6C757D"      # 浅色文本：浅灰色（辅助说明文字）
+    "primary": "#2E8B57",       # 主色：海绿色
+    "secondary": "#2F4F4F",     # 辅助色：深灰色
+    "accent": "#4682B4",         # 强调色：钢蓝色
+    "background": "#F8F9FA",    # 背景色：浅灰色
+    "card": "#FFFFFF",           # 卡片色：白色
+    "text_light": "#6C757D"      # 浅色文本：浅灰色
 }
 
 # 页面基础配置：标题、图标、布局与背景
@@ -26,7 +26,7 @@ st.set_page_config(
     page_icon="🌱",
     layout="wide"
 )
-# 全局CSS注入：统一样式，提升专业感（修复格式化语法）
+# 全局CSS注入：统一样式
 st.markdown(f"""
     <style>
         /* 页面背景 */
@@ -128,7 +128,7 @@ st.markdown(f"""
     </style>
 """, unsafe_allow_html=True)
 
-# 绘图字体配置：英文Times New Roman（图表全英文适配）
+# 绘图字体配置：英文Times New Roman（全英文适配）
 plt.rcParams['font.sans-serif'] = ['Times New Roman']
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示异常
 plt.rcParams['font.family'] = 'sans-serif'
