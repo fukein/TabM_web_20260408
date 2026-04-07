@@ -1,278 +1,3 @@
-# import streamlit as st
-# import numpy as np
-# import pandas as pd
-# import torch
-# import sklearn.metrics
-# import sklearn.preprocessing
-# import matplotlib.pyplot as plt
-# from io import BytesIO  
-# import warnings  
-# warnings.filterwarnings('ignore')
-
-# # ===================== 页面配置 =====================
-# st.set_page_config(page_title="南疆复播大豆粒重预测", page_icon="🌱", layout="wide")
-# # 字体设置（匹配指定绘图样式：中文宋体）
-# plt.rcParams['font.sans-serif'] = ['SimSun', 'Times New Roman']
-# plt.rcParams['axes.unicode_minus'] = False
-# plt.rcParams['font.family'] = 'sans-serif'
-# plt.rcParams['axes.linewidth'] = 1.2
-# plt.rcParams['font.size'] = 12
-
-# # ===================== 核心配置（100%匹配训练代码） =====================
-# # 加载训练集，复用训练时的预处理参数（无偏差关键）
-# train_df = pd.read_excel("6特征_训练集.xlsx")
-# # 数值特征（4个核心）
-# num_features = ['荚数', '粒数', '复叶位置', '累积日摄量']
-# x_num_train = train_df[num_features].values.astype(np.float32)
-# # 类别特征（2个）
-# cat_features = ['品种', '生育期']
-# SELECTED_FEATURES = num_features + cat_features
-# # 均值/标准差（训练集真实值）
-# y_mean = train_df["粒重"].mean()
-# y_std = train_df["粒重"].std()
-
-# # 类别映射（手动输入时用）
-# 品种映射 = {
-#     "新大豆23号":0,"龙垦324":1,"龙垦3092":2,"五豆188":3,
-#     "新大豆23号翻耕":4,"新大豆26号":5,"新大豆23号稀植":6
-# }
-# 生育期映射 = {"花荚期":0,"始粒期":1,"鼓粒初期":2,"鼓粒末期":3}
-
-# device = torch.device('cpu')
-
-# # ===================== 数据预处理（完全复现训练逻辑） =====================
-# # 加噪声+分位数归一化（和训练代码一致）
-# noise = np.random.default_rng(0).normal(0.0, 1e-5, x_num_train.shape).astype(x_num_train.dtype)
-# preprocessor = sklearn.preprocessing.QuantileTransformer(
-#     n_quantiles=max(min(len(x_num_train)//30, 1000), 10),
-#     output_distribution='normal'
-# ).fit(x_num_train + noise)
-
-# # ===================== 模型加载（匹配训练结构） =====================
-# @st.cache_resource(show_spinner=False)
-# def build_and_load_model():
-#     import rtdl_num_embeddings
-#     import tabm
-    
-#     # 用训练集数值特征维度构建嵌入层
-#     dummy_x_num = torch.randn(100, len(num_features))
-#     num_embeddings = rtdl_num_embeddings.PiecewiseLinearEmbeddings(
-#         rtdl_num_embeddings.compute_bins(dummy_x_num, n_bins=48),
-#         d_embedding=16, activation=False, version='B'
-#     )
-#     # 类别基数：品种7类、生育期4类（和训练一致）
-#     model = tabm.TabM.make(
-#         n_num_features=len(num_features),
-#         cat_cardinalities=[7, 4],
-#         d_out=1,
-#         num_embeddings=num_embeddings
-#     ).to(device)
-
-#     # 加载权重（删除版本冲突的mask键）
-#     state_dict = torch.load("6特征_大豆粒重模型.pth", map_location=device)
-#     state_dict.pop("num_module.impl.mask", None)
-#     model.load_state_dict(state_dict)
-#     model.eval()
-#     return model
-
-# model = build_and_load_model()
-
-# # ===================== 预测函数（无偏差核心） =====================
-# @torch.no_grad()
-# def predict(df_input, is_batch=False):
-#     df = df_input.copy()
-    
-#     # 区分手动/批量：手动需映射名称→编码，批量已编码直接用
-#     if not is_batch:
-#         df["品种"] = df["品种"].map(品种映射)
-#         df["生育期"] = df["生育期"].map(生育期映射)
-#     else:
-#         # 批量数据（测试集）过滤无效值，确保类别非负
-#         df["品种"] = df["品种"].astype(int)
-#         df["生育期"] = df["生育期"].astype(int)
-#         df = df[(df["品种"] >= 0) & (df["生育期"] >= 0)].reset_index(drop=True)
-
-#     # 数值特征预处理（复用训练预处理）
-#     x_num = df[num_features].values.astype(np.float32)
-#     x_num = preprocessor.transform(x_num)
-#     # 类别特征转int
-#     x_cat = df[cat_features].values.astype(np.int64)
-
-#     # 模型预测（复现训练时的多分支平均）
-#     x_num_t = torch.tensor(x_num, device=device)
-#     x_cat_t = torch.tensor(x_cat, dtype=torch.long, device=device)
-#     pred = model(x_num_t, x_cat_t).cpu().numpy()
-#     pred = pred.mean(axis=1)  # 多分支输出取平均
-#     pred = pred * y_std + y_mean  # 还原真实粒重
-
-#     if not is_batch:
-#         return float(pred[0])  # 手动返回标量
-#     else:
-#         return df, pred  # 批量返回有效数据+预测值
-
-# # ===================== 绘图函数（匹配指定测试集散点风格） =====================
-# def plot_test_scatter(y_true, y_pred):
-#     # 画布配置（长方形，匹配指定样式）
-#     fig, ax = plt.subplots(1, 1, figsize=(10, 6), dpi=100)
-    
-#     # 背景色：浅灰蓝
-#     ax.set_facecolor('#F7F9FC')
-    
-#     # 测试集散点（黑色，不透明）
-#     ax.scatter(y_true, y_pred, s=38, c='#2A2A2A', alpha=0.95, label="测试集")
-
-#     # 拟合线（红色虚线，线宽2.3）
-#     z = np.polyfit(y_true, y_pred, 1)
-#     k, b = z
-#     x_line = np.linspace(0, y_true.max() * 1.05, 200)
-#     y_fit = k * x_line + b
-#     ax.plot(x_line, y_fit, '#E63946', linestyle='--', linewidth=2.3, 
-#             label=f"y = {k:.4f}x {b:+.4f}")
-
-#     # 误差带（±10%青蓝系，±20%暖橙系）
-#     theta = np.arctan(k) if k != 0 else np.pi/4
-#     dy = np.cos(theta)
-#     band_10 = y_true.mean() * 0.10
-#     band_20 = y_true.mean() * 0.20
-
-#     # ±10% 渐变色
-#     y10_upper = y_fit + band_10 * dy
-#     y10_lower = y_fit - band_10 * dy
-#     ax.fill_between(x_line, y_fit, y10_upper, color='#457B9D', alpha=0.7)
-#     ax.fill_between(x_line, y10_lower, y_fit, color='#A8DADC', alpha=0.7)
-#     ax.fill_between(x_line, y10_lower, y10_upper, color='#C1E3E4', alpha=0.25)
-
-#     # ±20% 渐变色
-#     y20_upper = y_fit + band_20 * dy
-#     y20_lower = y_fit - band_20 * dy
-#     ax.fill_between(x_line, y10_upper, y20_upper, color='#FFB700', alpha=0.3)
-#     ax.fill_between(x_line, y20_lower, y10_lower, color='#FFE156', alpha=0.3)
-
-#     # 图例（误差带标识）
-#     ax.plot([], [], color='#457B9D', lw=10, alpha=0.6, label='±10%')
-#     ax.plot([], [], color='#FFB700', lw=10, alpha=0.5, label='±20%')
-
-#     # 坐标轴配置
-#     ax.set_xlabel('观测值（g）', fontsize=14, labelpad=8)
-#     ax.set_ylabel('预测值（g）', fontsize=14, labelpad=8)
-#     ax.grid(alpha=0.6, lw=0.8, color='white')  # 白色网格
-#     ax.legend(fontsize=11, loc='upper left', frameon=False)
-#     ax.set_aspect('auto')  # 取消正方形布局
-
-#     # 坐标范围（包含所有数据点）
-#     vmax = max(y_true.max(), y_pred.max()) * 1.05
-#     ax.set_xlim(0, vmax)
-#     ax.set_ylim(0, vmax)
-
-#     # 调整布局
-#     plt.tight_layout()
-#     return fig
-
-# # ===================== Excel下载函数（解决报错） =====================
-# def df_to_excel(df):
-#     output = BytesIO()
-#     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-#         df.to_excel(writer, index=False, sheet_name='测试集预测结果')
-#     output.seek(0)
-#     return output
-
-# # ===================== 界面配置 =====================
-# st.title("🌱 南疆复播大豆生理指标 → 粒重预测")
-# mode = st.sidebar.radio("选择功能模式", ["手动单样本预测", "测试集批量预测"])
-
-# # ---------------------- 1. 手动单样本预测 ----------------------
-# if mode == "手动单样本预测":
-#     st.subheader("📝 手动输入预测（输入原始特征名称）")
-#     # 分2列布局输入框
-#     col1, col2 = st.columns(2)
-#     with col1:
-#         荚数 = st.number_input("荚数（个）", min_value=0, max_value=200, value=40, step=1)
-#         粒数 = st.number_input("粒数（粒）", min_value=0, max_value=1000, value=100, step=1)
-#         复叶位置 = st.number_input("复叶位置", min_value=0.0, max_value=10.0, value=2.0, step=0.1)
-#     with col2:
-#         累积日摄量 = st.number_input("累积日摄量", min_value=0.0, max_value=200.0, value=50.0, step=1.0)
-#         品种 = st.selectbox("品种", options=list(品种映射.keys()), index=0)
-#         生育期 = st.selectbox("生育期", options=list(生育期映射.keys()), index=1)
-
-#     # 预测按钮
-#     if st.button("🔍 执行预测", type="primary", use_container_width=True):
-#         # 构造输入数据
-#         input_data = pd.DataFrame([{
-#             "荚数": 荚数, "粒数": 粒数, "复叶位置": 复叶位置, "累积日摄量": 累积日摄量,
-#             "品种": 品种, "生育期": 生育期
-#         }])
-#         # 预测并显示结果
-#         pred_val = predict(input_data, is_batch=False)
-#         st.success(f"✅ 预测粒重结果：**{pred_val:.4f} g**")
-
-# # ---------------------- 2. 测试集批量预测 ----------------------
-# elif mode == "测试集批量预测":
-#     st.subheader("📂 测试集批量预测（支持上传6特征测试集）")
-#     # 上传测试集Excel（✅ 移除use_container_width参数）
-#     uploaded_file = st.file_uploader("上传测试集Excel（需含：荚数、粒数、复叶位置、累积日摄量、品种、生育期、粒重）", 
-#                                      type="xlsx")
-    
-#     if uploaded_file is not None:
-#         # 读取上传数据
-#         test_df = pd.read_excel(uploaded_file)
-#         st.success(f"✅ 成功读取测试集：共 {len(test_df)} 个样本")
-
-#         # 检查必要列
-#         missing_cols = [col for col in SELECTED_FEATURES + ["粒重"] if col not in test_df.columns]
-#         if missing_cols:
-#             st.error(f"❌ 缺失必要列：{missing_cols}，请检查测试集格式")
-#             st.stop()
-
-#         # 执行批量预测
-#         with st.spinner("正在执行批量预测..."):
-#             valid_df, pred_values = predict(test_df[SELECTED_FEATURES], is_batch=True)
-#             # 构造结果表（含误差分析）
-#             result_df = valid_df.copy()
-#             result_df["真实粒重"] = test_df.loc[valid_df.index, "粒重"].values
-#             result_df["预测粒重"] = pred_values
-#             result_df["绝对误差"] = np.abs(result_df["真实粒重"] - result_df["预测粒重"]).round(4)
-#             result_df["相对误差(%)"] = (result_df["绝对误差"] / result_df["真实粒重"] * 100).round(2)
-
-#         # 显示预测结果（前10行预览）
-#         st.subheader("📋 预测结果预览（前10行）")
-#         display_cols = ["品种", "生育期", "荚数", "粒数", "真实粒重", "预测粒重", "绝对误差", "相对误差(%)"]
-#         st.dataframe(result_df[display_cols].head(10), use_container_width=True)
-
-#         # 输出模型评估指标
-#         st.subheader("📊 模型测试集评估指标")
-#         y_true = result_df["真实粒重"].values
-#         y_pred = result_df["预测粒重"].values
-#         r2 = sklearn.metrics.r2_score(y_true, y_pred)
-#         rmse = np.sqrt(sklearn.metrics.mean_squared_error(y_true, y_pred))
-#         mae = sklearn.metrics.mean_absolute_error(y_true, y_pred)
-#         mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
-
-#         # 分3列显示指标
-#         col1, col2, col3 = st.columns(3)
-#         col1.metric("R² 决定系数", f"{r2:.4f}", help="越接近1，拟合效果越好")
-#         col2.metric("RMSE 均方根误差（g）", f"{rmse:.4f}", help="越小，预测精度越高")
-#         col3.metric("MAE 平均绝对误差（g）", f"{mae:.4f}", help="越小，预测偏差越小")
-#         st.metric("MAPE 平均相对误差(%)", f"{mape:.2f}%", help="越小，相对偏差越小")
-
-#         # 绘制测试集散点拟合图
-#         st.subheader("📈 测试集观测值vs预测值散点拟合图")
-#         scatter_fig = plot_test_scatter(y_true, y_pred)
-#         st.pyplot(scatter_fig)
-
-#         # 下载完整结果
-#         st.subheader("💾 下载完整预测结果")
-#         excel_data = df_to_excel(result_df)
-#         st.download_button(
-#             label="📥 下载Excel结果（含误差分析）",
-#             data=excel_data,
-#             file_name="南疆复播大豆测试集预测结果.xlsx",
-#             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-#             use_container_width=True
-#         )
-
-
-
-
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -403,8 +128,8 @@ st.markdown(f"""
     </style>
 """, unsafe_allow_html=True)
 
-# 绘图字体配置：中文宋体+英文Times New Roman，学术图表风格
-plt.rcParams['font.sans-serif'] = ['SimSun', 'Times New Roman']
+# 绘图字体配置：英文Times New Roman（图表全英文适配）
+plt.rcParams['font.sans-serif'] = ['Times New Roman']
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示异常
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['axes.linewidth'] = 1.2  # 坐标轴线条宽度
@@ -527,80 +252,67 @@ def predict(df_input, is_batch=False):
     else:
         return df, pred
 
-# ===================== 绘图函数（学术级可视化，匹配专业报告风格） =====================
+# ===================== 绘图函数（图表中文转英文，保持样式不变） =====================
 def plot_test_scatter(y_true, y_pred):
     """
     绘制测试集观测值vs预测值散点拟合图（含拟合线与误差带）
     参数：y_true-真实粒重数组，y_pred-预测粒重数组
     返回：matplotlib图表对象
     """
-    # 画布初始化：长方形尺寸，适配宽屏显示，添加白色背景
-    fig, ax = plt.subplots(1, 1, figsize=(10, 6), dpi=100, facecolor='white')
-    ax.set_facecolor('#F7F9FC')  # 浅灰蓝背景，提升数据可读性
+    # 画布配置（长方形，匹配指定样式）
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6), dpi=100)
     
-    # 1. 绘制散点：黑色实心点，突出数据分布，添加轻微边框
-    ax.scatter(
-        y_true, y_pred, 
-        s=38, c='#2A2A2A', alpha=0.95, 
-        edgecolors='#666666', linewidth=0.5,  # 散点边框，增强立体感
-        label="样本点"
-    )
+    # 背景色：浅灰蓝
+    ax.set_facecolor('#F7F9FC')
     
-    # 2. 绘制拟合线：红色虚线，显示拟合公式（y=kx+b），线宽适配图表尺寸
-    z = np.polyfit(y_true, y_pred, 1)  # 一阶多项式拟合（线性拟合）
-    k, b = z  # 拟合系数：斜率k，截距b
-    x_line = np.linspace(0, y_true.max() * 1.05, 200)  # 拟合线x范围（留5%余量）
+    # 测试集散点（黑色，不透明）→ 英文标签：Sample Points
+    ax.scatter(y_true, y_pred, s=38, c='#2A2A2A', alpha=0.95, label="Sample Points")
+
+    # 拟合线（红色虚线，线宽2.3）→ 英文标签：Fitting Line
+    z = np.polyfit(y_true, y_pred, 1)
+    k, b = z
+    x_line = np.linspace(0, y_true.max() * 1.05, 200)
     y_fit = k * x_line + b
-    ax.plot(
-        x_line, y_fit, 
-        color='#DC143C', linestyle='--', linewidth=2.3,
-        label=f"拟合线: y = {k:.4f}x {b:+.4f}"
-    )
-    
-    # 3. 绘制误差带：±10%（青蓝系）、±20%（暖橙系），直观展示误差范围
-    theta = np.arctan(k) if k != 0 else np.pi/4  # 拟合线与x轴夹角（避免k=0时计算错误）
-    dy = np.cos(theta)  # 误差带垂直于拟合线的偏移系数
-    band_10 = y_true.mean() * 0.10  # ±10%误差带宽度（基于真实值均值）
-    band_20 = y_true.mean() * 0.20  # ±20%误差带宽度
-    
-    # ±10%误差带（青蓝系渐变，透明度递进）
+    ax.plot(x_line, y_fit, '#E63946', linestyle='--', linewidth=2.3, 
+            label=f"Fitting Line: y = {k:.4f}x {b:+.4f}")
+
+    # 误差带（±10%青蓝系，±20%暖橙系）→ 英文标签：±10% Error Band, ±20% Error Band
+    theta = np.arctan(k) if k != 0 else np.pi/4
+    dy = np.cos(theta)
+    band_10 = y_true.mean() * 0.10
+    band_20 = y_true.mean() * 0.20
+
+    # ±10% 渐变色
     y10_upper = y_fit + band_10 * dy
     y10_lower = y_fit - band_10 * dy
     ax.fill_between(x_line, y_fit, y10_upper, color='#457B9D', alpha=0.7)
     ax.fill_between(x_line, y10_lower, y_fit, color='#A8DADC', alpha=0.7)
     ax.fill_between(x_line, y10_lower, y10_upper, color='#C1E3E4', alpha=0.25)
-    
-    # ±20%误差带（暖橙系渐变，透明度递进）
+
+    # ±20% 渐变色
     y20_upper = y_fit + band_20 * dy
     y20_lower = y_fit - band_20 * dy
     ax.fill_between(x_line, y10_upper, y20_upper, color='#FFB700', alpha=0.3)
     ax.fill_between(x_line, y20_lower, y10_lower, color='#FFE156', alpha=0.3)
-    
-    # 4. 图表样式配置：图例、坐标轴标签、网格（学术级规范）
-    ax.plot([], [], color='#457B9D', lw=10, alpha=0.6, label='±10%误差带')
-    ax.plot([], [], color='#FFB700', lw=10, alpha=0.5, label='±20%误差带')
-    ax.set_xlabel('观测值（g）', fontsize=14, labelpad=8, color=COLORS['secondary'])  # x轴标签（粒重单位）
-    ax.set_ylabel('预测值（g）', fontsize=14, labelpad=8, color=COLORS['secondary'])  # y轴标签
-    # 网格：白色实线，低透明度，不遮挡数据
-    ax.grid(alpha=0.6, lw=0.8, color='white', linestyle='-')
-    # 图例：无框，左上方，字体适配图表尺寸
-    ax.legend(fontsize=11, loc='upper left', frameon=False, markerscale=1.2)
-    ax.set_aspect('auto')  # 取消正方形强制约束，适配数据分布
-    
-    # 5. 坐标范围与坐标轴样式：包含所有数据点，优化刻度显示
+
+    # 图例（误差带标识）→ 英文标签
+    ax.plot([], [], color='#457B9D', lw=10, alpha=0.6, label='±10% Error Band')
+    ax.plot([], [], color='#FFB700', lw=10, alpha=0.5, label='±20% Error Band')
+
+    # 坐标轴配置→ 英文标签：Observed Value (g), Predicted Value (g)
+    ax.set_xlabel('Observed Value (g)', fontsize=14, labelpad=8)
+    ax.set_ylabel('Predicted Value (g)', fontsize=14, labelpad=8)
+    ax.grid(alpha=0.6, lw=0.8, color='white')  # 白色网格
+    ax.legend(fontsize=11, loc='upper left', frameon=False)
+    ax.set_aspect('auto')  # 取消正方形布局
+
+    # 坐标范围（包含所有数据点）
     vmax = max(y_true.max(), y_pred.max()) * 1.05
     ax.set_xlim(0, vmax)
     ax.set_ylim(0, vmax)
-    # 坐标轴线条颜色与宽度
-    ax.spines['left'].set_color(COLORS['text_light'])
-    ax.spines['bottom'].set_color(COLORS['text_light'])
-    ax.spines['left'].set_linewidth(1.2)
-    ax.spines['bottom'].set_linewidth(1.2)
-    # 刻度颜色
-    ax.tick_params(axis='both', colors=COLORS['text_light'], labelsize=11)
-    
-    # 布局调整：避免标签截断，添加轻微边距
-    plt.tight_layout(pad=1.0)
+
+    # 调整布局
+    plt.tight_layout()
     return fig
 
 def plot_true_pred_curve(y_true, y_pred):
@@ -609,62 +321,40 @@ def plot_true_pred_curve(y_true, y_pred):
     参数：y_true-真实粒重数组，y_pred-预测粒重数组
     返回：matplotlib图表对象
     """
-    # 画布初始化：纵向尺寸适配趋势展示，白色背景
-    fig, ax = plt.subplots(1, 1, figsize=(8, 4), dpi=100, facecolor='white')
+    # 画布初始化：纵向尺寸适配趋势展示
+    fig, ax = plt.subplots(1, 1, figsize=(8, 4), dpi=100)
     
-    # 按真实值排序：确保曲线平滑，便于观察趋势匹配度
+    # 按真实值排序：确保曲线平滑
     sorted_idx = np.argsort(y_true)  # 真实值排序索引
     y_true_sorted = y_true[sorted_idx]  # 排序后的真实值
     y_pred_sorted = y_pred[sorted_idx]  # 对应排序后的预测值
     
-    # 1. 绘制真实值曲线：蓝色实线+圆形标记（每2个点显示1个标记，避免拥挤）
+    # 1. 绘制真实值曲线→ 英文标签：Actual Value
     ax.plot(
         np.arange(len(y_true_sorted)), y_true_sorted,
-        color='#0047AB', label='真实值', alpha=0.9, linewidth=1.8,
-        marker='o', markersize=3, markevery=2, linestyle='-',
-        markerfacecolor='white', markeredgecolor='#0047AB', markeredgewidth=0.8  # 标记样式优化
+        color='#0047AB', label='Actual Value', alpha=0.9, linewidth=1.8,
+        marker='o', markersize=3, markevery=2, linestyle='-'
     )
     
-    # 2. 绘制预测值曲线：红色点线+方形标记（与真实值曲线区分）
+    # 2. 绘制预测值曲线→ 英文标签：Predicted Value
     ax.plot(
         np.arange(len(y_pred_sorted)), y_pred_sorted,
-        color='#DC143C', label='预测值', alpha=0.9, linewidth=1.8,
-        marker='s', markersize=3, markevery=2, linestyle=':',
-        markerfacecolor='white', markeredgecolor='#DC143C', markeredgewidth=0.8  # 标记样式优化
+        color='#DC143C', label='Predicted Value', alpha=0.9, linewidth=1.8,
+        marker='s', markersize=3, markevery=2, linestyle=':'
     )
     
-    # 3. 图表样式配置：标题、标签、网格、边框（学术级规范）
-    ax.set_title(
-        '真实值与预测值趋势对比', 
-        fontsize=13, pad=10, 
-        color=COLORS['secondary'], fontweight='500'
-    )  # 标题（无"测试集"字样，字体加粗）
-    ax.set_xlabel(
-        '样本索引', 
-        fontsize=11, labelpad=6, 
-        color=COLORS['secondary']
-    )  # x轴标签（样本顺序）
-    ax.set_ylabel(
-        '粒重（g）', 
-        fontsize=11, labelpad=6, 
-        color=COLORS['secondary']
-    )  # y轴标签（粒重单位）
-    # 图例：无框，左上方，字体适配
+    # 3. 图表样式配置→ 英文标题：Trend Comparison of Actual vs Predicted Values；英文轴标签：Sample Index, Grain Weight (g)
+    ax.set_title('Trend Comparison of Actual vs Predicted Values', fontsize=13, pad=5)
+    ax.set_xlabel('Sample Index', fontsize=11)
+    ax.set_ylabel('Grain Weight (g)', fontsize=11)
     ax.legend(loc='upper left', fontsize=10, frameon=False, markerscale=1.2)
-    # 网格：浅色虚线，低透明度，不干扰曲线
-    ax.grid(alpha=0.2, linestyle=':', linewidth=0.8, color=COLORS['text_light'])
-    # 隐藏上、右边框，突出曲线趋势
+    ax.grid(alpha=0.2, linestyle=':', linewidth=0.8)
+    # 隐藏上、右边框
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    # 坐标轴样式：左/下边框颜色与宽度
-    ax.spines['left'].set_color(COLORS['text_light'])
-    ax.spines['bottom'].set_color(COLORS['text_light'])
-    ax.spines['left'].set_linewidth(1.2)
-    ax.spines['bottom'].set_linewidth(1.2)
-    # 刻度样式：颜色与字体大小
-    ax.tick_params(axis='both', colors=COLORS['text_light'], labelsize=9)
-    
-    # 布局调整：避免底部标签截断，添加边距
+    ax.tick_params(labelsize=9)
+
+    # 布局调整（避免标签截断）
     fig.subplots_adjust(left=0.1, right=0.95, bottom=0.15, top=0.85)
     return fig
 
@@ -677,7 +367,7 @@ def df_to_excel(df):
     """
     output = BytesIO()  # 内存字节流（避免生成本地文件）
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # 写入Excel：设置工作表名称，不保留索引，格式优化
+        # 写入Excel：工作表名称中文不变（保持文件可读性）
         df.to_excel(writer, index=False, sheet_name='大豆粒重预测结果')
         # 获取工作表对象，优化列宽（适配内容长度）
         worksheet = writer.sheets['大豆粒重预测结果']
@@ -695,7 +385,7 @@ def df_to_excel(df):
     output.seek(0)  # 重置文件指针，确保Streamlit可正确读取
     return output
 
-# ===================== 界面交互逻辑（手动/批量模式） =====================
+# ===================== 界面交互逻辑（保持原有中文交互，仅图表英文） =====================
 # 页面标题（应用名称）
 st.markdown(f"<h1 class='stTitle'>🌱 南疆复播大豆粒重预测系统</h1>", unsafe_allow_html=True)
 
@@ -866,7 +556,7 @@ elif mode == "上传多样本批量预测":
                 st.success(f"✅ 批量预测完成 | 有效预测样本：{len(result_df)} 条 | 无效样本：{len(test_df) - len(result_df)} 条")
             st.markdown("</div>", unsafe_allow_html=True)  # 关闭卡片容器
         
-        # 步骤4：结果展示与可视化（卡片式布局，横向滚动表格）
+        # 步骤4：结果展示与可视化（卡片式布局，图表标题/标签英文）
         with st.container():
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown(f"<p style='color:{COLORS['secondary']}; font-weight:500; margin-bottom:0.5rem;'>步骤4：预测结果与可视化</p>", unsafe_allow_html=True)
@@ -927,14 +617,14 @@ elif mode == "上传多样本批量预测":
                     </div>
                 """, unsafe_allow_html=True)
                 
-                # 绘制可视化图表：趋势对比曲线 + 散点拟合图
+                # 绘制可视化图表：趋势对比曲线 + 散点拟合图（图表全英文）
                 st.markdown(f"<p style='color:{COLORS['secondary']}; font-weight:500; margin:1.5rem 0 0.5rem;'>结果可视化</p>", unsafe_allow_html=True)
-                # 趋势对比曲线
-                st.markdown(f"<p style='color:{COLORS['text_light']}; font-size:0.9rem;'>真实值与预测值趋势对比</p>", unsafe_allow_html=True)
+                # 趋势对比曲线（标题英文）
+                st.markdown(f"<p style='color:{COLORS['text_light']}; font-size:0.9rem;'>Trend Comparison of Actual vs Predicted Values</p>", unsafe_allow_html=True)
                 curve_fig = plot_true_pred_curve(y_true, y_pred)
                 st.pyplot(curve_fig)
-                # 散点拟合图
-                st.markdown(f"<p style='color:{COLORS['text_light']}; font-size:0.9rem; margin-top:1rem;'>观测值与预测值散点拟合（含误差带）</p>", unsafe_allow_html=True)
+                # 散点拟合图（标题英文）
+                st.markdown(f"<p style='color:{COLORS['text_light']}; font-size:0.9rem; margin-top:1rem;'>Scatter Fit of Observed vs Predicted Values (with Error Bands)</p>", unsafe_allow_html=True)
                 scatter_fig = plot_test_scatter(y_true, y_pred)
                 st.pyplot(scatter_fig)
             else:
